@@ -6,6 +6,7 @@ use tokio::signal;
 
 use noalbs::{chat::ChatPlatform, config, Noalbs};
 use tracing::warn;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,19 +18,24 @@ async fn main() -> Result<()> {
         env::set_var("RUST_LOG", "noalbs=info");
     }
 
-    let (non_blocking_appender, _guard) = tracing_appender::non_blocking(appender());
-    if cfg!(windows) {
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_ansi(false)
-            .with_writer(non_blocking_appender)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_writer(non_blocking_appender)
-            .init();
-    }
+    let file_appender = tracing_appender::rolling::daily("logs", "noalbs.log");
+    let (non_blocking_file, _guard_file) = tracing_appender::non_blocking(file_appender);
+
+    let (non_blocking_stdout, _guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
+
+    let console_layer = fmt::Layer::new()
+        .with_writer(non_blocking_stdout)
+        .with_ansi(!cfg!(windows));
+
+    let file_layer = fmt::Layer::new()
+        .with_writer(non_blocking_file)
+        .with_ansi(false);
+
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(console_layer)
+        .with(file_layer)
+        .init();
 
     check_env_file();
 
@@ -177,21 +183,7 @@ struct GithubApi {
 fn check_env_file() {
     if env::var("TWITCH_BOT_USERNAME").is_err() {
         warn!("Couldn't load chat credentials from .env - continuing without connecting to chat.");
-        warn!("Hint: edit .env it with your login information - see README");
+        warn!("Hint: edit .env with your login information - see README");
         warn!("https://github.com/NOALBS/nginx-obs-automatic-low-bitrate-switching/tree/v2#readme");
     };
-}
-
-fn appender() -> Box<dyn std::io::Write + Send + 'static> {
-    if let Ok(log_dir) = env::var("LOG_DIR") {
-        let file_name_prefix = if let Ok(f) = env::var("LOG_FILE_NAME") {
-            f
-        } else {
-            "noalbs.log".to_string()
-        };
-
-        Box::new(tracing_appender::rolling::daily(log_dir, file_name_prefix))
-    } else {
-        Box::new(std::io::stdout())
-    }
 }
